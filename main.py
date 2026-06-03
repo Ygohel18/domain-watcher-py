@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+
+import os
+import time
+import asyncio
+import json
+from pathlib import Path
+from dotenv import load_dotenv
+from rdap import RdapClient
+from telegram import Bot
+
+# Load .env
+load_dotenv()
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+if not BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN not found in .env")
+
+if not CHAT_ID:
+    raise ValueError("TELEGRAM_CHAT_ID not found in .env")
+
+# Load domains from file
+with open("domains.txt", "r") as f:
+    DOMAINS = [
+        line.strip().lower()
+        for line in f
+        if line.strip() and not line.startswith("#")
+    ]
+
+bot = Bot(token=BOT_TOKEN)
+rdap = RdapClient()
+
+# Simple persistent cache to throttle availability notifications across cron runs
+CACHE_PATH = Path(__file__).parent / ".domain_cache.json"
+
+
+def load_cache():
+    try:
+        if CACHE_PATH.exists():
+            return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def save_cache(data):
+    try:
+        CACHE_PATH.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _rdap_field(obj, name, default=None):
+    """Safely get a field from an RDAP result which may be a dict or object."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        try:
+            return getter(name, default)
+        except Exception:
+            pass
+
+    # common attribute name variants
+    candidates = [name]
+    if name == "status":
+        candidates += ["statuses", "status_list"]
+    if name in ("expiration_date", "expiry", "expires"):
+        candidates += ["expiration_date", "expiry", "expires", "expiration"]
+
+    for attr in candidates:
+        if hasattr(obj, attr):
+            try:
+                return getattr(obj, attr)
+            except Exception:
+                continue
+
+    # try __dict__ fallback
+    try:
+        data = getattr(obj, "__dict__", None)
+        if isinstance(data, dict) and name in data:
+            return data.get(name, default)
+    except Exception:
+        pass
+
+    return default
+
+
+def send(msg):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        asyncio.ensure_future(bot.send_message(chat_id=CHAT_ID, text=msg))
+    else:
+        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg))
+
+
+cache = load_cache()
+
+for domain in DOMAINS:
+    try:
+        result = rdap.get_domain(domain)
+
+        status = _rdap_field(result, "status", [])
+        expiry = _rdap_field(result, "expiration_date")
+
+        if isinstance(status, (list, tuple)):
+            status_text = " ".join([str(s) for s in status]).lower()
+        else:
+            status_text = str(status or "").lower()
+
+        state = "active"
+
+        if "pending delete" in status_text:
+            state = "pending_delete"
+        elif "redemption" in status_text:
+            state = "grace_period"
+
+        send(
+            f"🌐 Domain: {domain}\n"
+            f"Status: {state}\n"
+            f"RDAP: {status_text or 'active'}\n"
+            f"Expiry: {expiry}"
+        )
+
+        # If domain was previously marked available, reset its counter
+        entry = cache.get(domain, {})
+        if entry.get("last_state") == "available":
+            cache[domain] = {"available_count": 0, "last_state": "not_available"}
+            save_cache(cache)
+
+    except Exception as e:
+        error = str(e).lower()
+
+        if (
+            "not found" in error
+            or "404" in error
+            or "no object found" in error
+        ):
+            # Domain appears available. Throttle notifications: allow only first 10 consecutive sends.
+            entry = cache.get(domain, {})
+            count = int(entry.get("available_count", 0)) + 1
+
+            if count <= 10:
+                send(f"🔥 DOMAIN AVAILABLE\n\n{domain}\n\n(notification {count}/10)")
+
+            cache[domain] = {"available_count": count, "last_state": "available"}
+            save_cache(cache)
+        else:
+            send(
+                f"⚠️ Error checking {domain}\n\n{e}"
+            )
+
+    time.sleep(2)
