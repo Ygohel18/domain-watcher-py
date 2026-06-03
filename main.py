@@ -124,12 +124,14 @@ for domain in DOMAINS:
         elif "redemption" in status_text:
             state = "grace_period"
 
-        send(
-            f"🌐 Domain: {domain}\n"
-            f"Status: {state}\n"
-            f"RDAP: {status_text or 'active'}\n"
-            f"Expiry: {expiry}"
-        )
+        # Only send a Telegram notification for non-active states
+        if state != "active":
+            send(
+                f"🌐 Domain: {domain}\n"
+                f"Status: {state}\n"
+                f"RDAP: {status_text or 'active'}\n"
+                f"Expiry: {expiry}"
+            )
 
         # If domain was previously marked available, reset its counter
         entry = cache.get(domain, {})
