@@ -17,12 +17,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN not found in .env")
-
-if not CHAT_ID:
-    raise ValueError("TELEGRAM_CHAT_ID not found in .env")
-
 # Initialize Firebase Admin SDK if service key exists
 SERVICE_ACCOUNT_KEY = Path(__file__).parent / "serviceAccountKey.json"
 fcm_initialized = False
@@ -45,7 +39,17 @@ with open("domains.txt", "r") as f:
         if line.strip() and not line.startswith("#")
     ]
 
-bot = Bot(token=BOT_TOKEN)
+telegram_enabled = False
+bot = None
+if BOT_TOKEN and CHAT_ID:
+    try:
+        bot = Bot(token=BOT_TOKEN)
+        telegram_enabled = True
+    except Exception as e:
+        print(f"Failed to initialize Telegram Bot: {e}")
+else:
+    print("Warning: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set. Telegram alerts are disabled.")
+
 rdap = RdapClient()
 
 # Simple persistent cache to throttle availability notifications across cron runs
@@ -108,18 +112,17 @@ def _rdap_field(obj, name, default=None):
 
 
 def send(msg):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    if not telegram_enabled or bot is None:
+        return
 
-    try:
-        if loop is not None:
-            asyncio.ensure_future(bot.send_message(chat_id=CHAT_ID, text=msg))
-        else:
-            asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg))
-    except Exception as e:
-        print(f"Failed to send Telegram message: {e}")
+    def _send_sync():
+        try:
+            asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg, connect_timeout=3.0, read_timeout=3.0))
+        except Exception as e:
+            print(f"Failed to send Telegram message: {e}")
+
+    import threading
+    threading.Thread(target=_send_sync, daemon=True).start()
 
 
 def send_fcm_notification(title, body, category="System Alerts", priority="High"):
