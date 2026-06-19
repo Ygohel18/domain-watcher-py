@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import os
 import time
 import asyncio
@@ -138,6 +141,9 @@ def send_fcm_notification(title, body, category="System Alerts", priority="High"
                 "priority": priority,
                 "timestamp": str(int(time.time() * 1000))
             },
+            android=messaging.AndroidConfig(
+                priority="high"
+            ),
             topic="all"
         )
         messaging.send(message)
