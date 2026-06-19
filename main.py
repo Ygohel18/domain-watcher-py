@@ -34,6 +34,8 @@ if SERVICE_ACCOUNT_KEY.exists():
         fcm_initialized = True
     except Exception as e:
         print(f"Failed to initialize Firebase Admin SDK: {e}")
+else:
+    print("Warning: serviceAccountKey.json not found. FCM notifications are disabled.")
 
 # Load domains from file
 with open("domains.txt", "r") as f:
@@ -122,13 +124,10 @@ def send(msg):
 
 def send_fcm_notification(title, body, category="System Alerts", priority="High"):
     if not fcm_initialized:
+        print(f"Skipping FCM notification (FCM not initialized): {title}")
         return
     try:
         message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
             data={
                 "title": title,
                 "message": body,
