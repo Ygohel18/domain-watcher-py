@@ -111,10 +111,13 @@ def send(msg):
     except RuntimeError:
         loop = None
 
-    if loop is not None:
-        asyncio.ensure_future(bot.send_message(chat_id=CHAT_ID, text=msg))
-    else:
-        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg))
+    try:
+        if loop is not None:
+            asyncio.ensure_future(bot.send_message(chat_id=CHAT_ID, text=msg))
+        else:
+            asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg))
+    except Exception as e:
+        print(f"Failed to send Telegram message: {e}")
 
 
 def send_fcm_notification(title, body, category="System Alerts", priority="High"):
