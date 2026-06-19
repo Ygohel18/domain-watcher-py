@@ -8,6 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from rdap import RdapClient
 from telegram import Bot
+import firebase_admin
+from firebase_admin import credentials, messaging
 
 # Load .env
 load_dotenv()
@@ -20,6 +22,18 @@ if not BOT_TOKEN:
 
 if not CHAT_ID:
     raise ValueError("TELEGRAM_CHAT_ID not found in .env")
+
+# Initialize Firebase Admin SDK if service key exists
+SERVICE_ACCOUNT_KEY = Path(__file__).parent / "serviceAccountKey.json"
+fcm_initialized = False
+
+if SERVICE_ACCOUNT_KEY.exists():
+    try:
+        cred = credentials.Certificate(str(SERVICE_ACCOUNT_KEY))
+        firebase_admin.initialize_app(cred)
+        fcm_initialized = True
+    except Exception as e:
+        print(f"Failed to initialize Firebase Admin SDK: {e}")
 
 # Load domains from file
 with open("domains.txt", "r") as f:
@@ -103,6 +117,29 @@ def send(msg):
         asyncio.run(bot.send_message(chat_id=CHAT_ID, text=msg))
 
 
+def send_fcm_notification(title, body, category="System Alerts", priority="High"):
+    if not fcm_initialized:
+        return
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data={
+                "title": title,
+                "message": body,
+                "category": category,
+                "priority": priority,
+                "timestamp": str(int(time.time() * 1000))
+            },
+            topic="all"
+        )
+        messaging.send(message)
+    except Exception as e:
+        print(f"Failed to send FCM notification: {e}")
+
+
 cache = load_cache()
 
 for domain in DOMAINS:
@@ -126,11 +163,18 @@ for domain in DOMAINS:
 
         # Only send a Telegram notification for non-active states
         if state != "active":
-            send(
+            msg = (
                 f"🌐 Domain: {domain}\n"
                 f"Status: {state}\n"
                 f"RDAP: {status_text or 'active'}\n"
                 f"Expiry: {expiry}"
+            )
+            send(msg)
+            send_fcm_notification(
+                title=f"Domain Status Alert: {domain}",
+                body=f"Domain '{domain}' status changed to {state} (RDAP: {status_text or 'active'}).",
+                category="System Alerts",
+                priority="High"
             )
 
         # If domain was previously marked available, reset its counter
@@ -152,13 +196,25 @@ for domain in DOMAINS:
             count = int(entry.get("available_count", 0)) + 1
 
             if count <= 10:
-                send(f"🔥 DOMAIN AVAILABLE\n\n{domain}\n\n(notification {count}/10)")
+                msg = f"🔥 DOMAIN AVAILABLE\n\n{domain}\n\n(notification {count}/10)"
+                send(msg)
+                send_fcm_notification(
+                    title="Domain Available!",
+                    body=f"Domain '{domain}' appears to be available for registration! (Check {count}/10)",
+                    category="Emergency Notifications",
+                    priority="Critical"
+                )
 
             cache[domain] = {"available_count": count, "last_state": "available"}
             save_cache(cache)
         else:
-            send(
-                f"⚠️ Error checking {domain}\n\n{e}"
+            msg = f"⚠️ Error checking {domain}\n\n{e}"
+            send(msg)
+            send_fcm_notification(
+                title="Domain Check Error",
+                body=f"An error occurred while checking '{domain}': {e}",
+                category="System Alerts",
+                priority="Medium"
             )
 
     time.sleep(2)

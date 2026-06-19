@@ -15,3 +15,6 @@ domains.txt
 
 # OS files
 .DS_Store
+
+# Firebase private service account key
+serviceAccountKey.json
