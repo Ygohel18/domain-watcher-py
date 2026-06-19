@@ -134,6 +134,10 @@ def send_fcm_notification(title, body, category="System Alerts", priority="High"
         return
     try:
         message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
             data={
                 "title": title,
                 "message": body,
@@ -142,7 +146,15 @@ def send_fcm_notification(title, body, category="System Alerts", priority="High"
                 "timestamp": str(int(time.time() * 1000))
             },
             android=messaging.AndroidConfig(
-                priority="high"
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="monitor_alerts",
+                    default_sound=True,
+                    default_vibrate_timings=True
+                )
+            ),
+            fcm_options=messaging.FCMOptions(
+                analytics_label="domain-watcher-alerts"
             ),
             topic="all"
         )
